@@ -1,5 +1,10 @@
 # KnowMoreBusBot
-K(no)w More Bus
+K(no)w More Bus Bot
+
+Can be found on telegram:
+t.me/KnowMoreBusBot			
+or search for KnowMoreBusBot
+
 
 Functions:
 	- Location based bus stop seeking, enables query without knowing bus stop code or bus stop name, drop location pin right on top of bus stop, first result will be the correct one.
@@ -25,4 +30,3 @@ Usage:
 		[Bus Stop 2]
 		[Bus Stop 3]
 		[Bus Stop 4]
-

@@ -4,6 +4,7 @@ import logging
 import json
 import requests
 import datetime
+import threading
 from flask import Flask, request
 from BusBot import BusBot
 from Bus_Arrival import Bus_Stop, Bus
@@ -14,33 +15,34 @@ app = Flask(__name__)
 bus_stops = []
 radius = 0.3
 API_KEY = 'YOUR API KEY'
-logging.basicConfig(filename = './TBot.log', level = logging.DEBUG)
+logging.basicConfig(filename = './Bus.log', level = logging.DEBUG)
 logger = logging.getLogger()
 
 
 lookup = {'SD' : u'\u2796', 'DD' : u'\u2797', u'BD' : 'Bendy', 'SEA' : u'\u2705', 'SDA' : u'\u26a0\ufe0f', 'LSD' : u'\u274c'}
 
 
-@app.route('/webhookurl', methods=['GET', 'POST'])
+@app.route('/UNIQUEPATH_OR_BOTTOKEN', methods=['POST'])
 def bottoken():
 	data = request.data
 	logger.info('Incoming POST: {}'.format(data))
-	b.currentUpdate = json.loads(data)
-	processUpdate()  #async this and try?
-	return 'Reached hook!'
+	currentUpdate = json.loads(data)
+	t = threading.Thread(target = processUpdate, args = (currentUpdate,))
+	t.start()
+	return ""
 
 
-def processUpdate():
-	if 'message' in b.currentUpdate and 'location' not in b.currentUpdate['message']:
-		update = b.processTextMessage() #ends up as b.Update
+def processUpdate(currentUpdate):
+	if 'message' in currentUpdate and 'location' not in currentUpdate['message']:
+		update = b.processTextMessage(currentUpdate)
 		incomingText(update)
 		return
-	if 'callback_query' in b.currentUpdate:
-		update = b.processCallbackQuery()  #ends up as b.Update
+	if 'callback_query' in currentUpdate:
+		update = b.processCallbackQuery(currentUpdate)
 		incomingCallbackQuery(update)
 		return
-	if 'location' in b.currentUpdate['message']:
-		update = b.processLocation()  #ends up as b.Update
+	if 'location' in currentUpdate['message']:
+		update = b.processLocation(currentUpdate)
 		incomingLocation(update)
 		return
 
@@ -52,6 +54,26 @@ def incomingText(Message):
 		bus_stop = parseArrivals(arrivals)
 		resp = constructBusArrivalResponse(bus_stop)
 		b.sendInlineKeyboard(chat_id = Message.Chat_ID, text = resp, parse_mode = 'HTML', display_text = ['Refresh'], callback_data = [busStopCode])
+	elif Message.Message_text == '/start':
+		welcome_text = u'''Welcome to <b>K(no)wMoreBusBot</b>
+
+Start by sending either the bus stop code, e.g:
+
+<b>19051</b>
+
+OR
+
+send your location to find bus stops around you by selecting <b>paperclip icon</b> and then <b>location</b>!
+<i>Pro-tip: place location pin directly on top of bus stop to query bus stop without knowing bus stop code or bus stop name!</i>
+
+Seats availability is indicated as follows:
+\u2705 means there are quite a number of seats available
+
+\u26a0 means there are limited seats and you will probably have to stand :(
+
+\ufe0f\u274c means there is absolutely no room, you might even not be able to board! >:(
+'''
+		b.sendHTMLMessage(chat_id = Message.Chat_ID, text = welcome_text)
 	else:
 		pass #means its not a bus arrival enquiry
 
@@ -103,16 +125,18 @@ def constructBusArrivalResponse(bus_stop_obj):
 	c = bus_stop_obj
 	#resp = u'\ud83d\ude8f<b>' + c.BusStopCode + u'</b>  Seating: \u2705\u26a0\ufe0f\u274c:\n'
 	bus_stop = getBusStopByCode(c.BusStopCode)
-	resp = u"\ud83d\ude8f<b>{} ({})</b> Seating: \u2705\u26a0\ufe0f\u274c\n".format(bus_stop.Description, c.BusStopCode)
+	resp = u"\ud83d\ude8f<b>{} ({})</b>\n".format(bus_stop.Description, c.BusStopCode)
 	for buses in c.Services:
 		for bus_no in buses:
 			resp += u'\ud83d\ude8c<b>' + bus_no + "</b>: "
+#			resp += u'<b>' + bus_no + "</b>: "
 			for bus in buses[bus_no]:
 				if bus.Type and bus.Load:
 					if bus.Arrival <= 1:
-						resp += u"{}{} ".format('Arr', lookup[bus.Load], lookup[bus.Type])
+						resp += u"{}{}, ".format('Arr', lookup[bus.Load], lookup[bus.Type])
 					else:
-						resp += u"{} mins{} ".format(bus.Arrival, lookup[bus.Load], lookup[bus.Type])
+						resp += u"{}min{}, ".format(bus.Arrival, lookup[bus.Load], lookup[bus.Type])
+			resp = resp.rstrip(', ')
 			resp += '\n'
 	return resp
 
@@ -238,7 +262,7 @@ def getBusStopByCode(busstopcode):
 
 
 def startHooking():
-	app.run(debug = True)
+	app.run(host = '0.0.0.0', port = 8443, debug = True, ssl_context = ('ssl.crt', 'ssl.key'))
 
 
 if __name__ == '__main__':
