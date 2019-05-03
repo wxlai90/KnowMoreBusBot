@@ -2,7 +2,7 @@
 K(no)w More Bus Bot
 
 Can be found on telegram:
-[Telegram Link](tg://t.me/KnowMoreBusBot)
+<http://t.me/KnowMoreBusBot>
 or search for KnowMoreBusBot
 
 
