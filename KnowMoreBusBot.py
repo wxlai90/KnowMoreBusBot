@@ -5,16 +5,22 @@ import json
 import requests
 import datetime
 import threading
+import sys
 from flask import Flask, request
 from BusBot import BusBot
 from Bus_Arrival import Bus_Stop, Bus
 from math import cos, asin, sqrt
+from cachetools import TTLCache
+
+
 
 b = BusBot()
+cache = TTLCache(maxsize=100, ttl=15)
 app = Flask(__name__)
 bus_stops = []
+nus_bus_stops = []
 radius = 0.3
-API_KEY = 'YOUR API KEY'
+API_KEY = 'YOUR LTA DATAMALL API KEY'
 logging.basicConfig(filename = './Bus.log', level = logging.DEBUG)
 logger = logging.getLogger()
 
@@ -22,13 +28,14 @@ logger = logging.getLogger()
 lookup = {'SD' : u'\u2796', 'DD' : u'\u2797', u'BD' : 'Bendy', 'SEA' : u'\u2705', 'SDA' : u'\u26a0\ufe0f', 'LSD' : u'\u274c'}
 
 
-@app.route('/UNIQUEPATH_OR_BOTTOKEN', methods=['POST'])
+@app.route('YOUR BOT TOKEN OR UUID', methods=['POST'])
 def bottoken():
 	data = request.data
 	logger.info('Incoming POST: {}'.format(data))
 	currentUpdate = json.loads(data)
 	t = threading.Thread(target = processUpdate, args = (currentUpdate,))
 	t.start()
+	#processUpdate(currentUpdate)  #async this and try?
 	return ""
 
 
@@ -45,7 +52,8 @@ def processUpdate(currentUpdate):
 		update = b.processLocation(currentUpdate)
 		incomingLocation(update)
 		return
-
+	#except Exception as e:
+	#	pass #other types of messages received, not supported
 
 def incomingText(Message):
 	busStopCode = isBusCode(Message.Message_text)
@@ -74,11 +82,15 @@ Seats availability is indicated as follows:
 \ufe0f\u274c means there is absolutely no room, you might even not be able to board! >:(
 '''
 		b.sendHTMLMessage(chat_id = Message.Chat_ID, text = welcome_text)
+	elif Message.Message_text == '/about':
+		text = 'K(no)wMoreBusBot is completely open-source, <a href="https://github.com/wxlai90/KnowMoreBusBot">view its code on Github!</a>\n'
+		b.sendHTMLMessage(chat_id = Message.Chat_ID, text = text)
 	else:
 		pass #means its not a bus arrival enquiry
 
 def incomingCallbackQuery(CallbackQuery):
 	busStopCode = isBusCode(CallbackQuery.Callback_Data)
+	nusBusStop = isNusBus(CallbackQuery.Callback_Data)
 	sendNewKB = False
 	if 'Bus Stops Around You (300m radius):' in CallbackQuery.Message_text:
 		sendNewKB = True
@@ -90,6 +102,11 @@ def incomingCallbackQuery(CallbackQuery):
 			b.sendInlineKeyboard(chat_id = CallbackQuery.Chat_ID, text = resp, parse_mode = 'HTML', display_text = ['Refresh'], callback_data = [busStopCode])
 		else:
 			b.editInlineKeyBoard(chat_id = CallbackQuery.Chat_ID, text = resp, parse_mode = 'HTML', message_id = CallbackQuery.Message_ID, display_text = ['Refresh'], callback_data = [busStopCode])
+	if nusBusStop:
+		name = CallbackQuery.Callback_Data.split('|')[1]
+		arrivals = getNusArrivals(name)
+		resp = constructNusArrivals(arrivals)
+		b.sendTextMessage(chat_id = CallbackQuery.Chat_ID, text = resp)
 
 
 def incomingLocation(Location):
@@ -121,8 +138,14 @@ def isBusCode(s):
 	return False
 
 
+def isNusBus(s):
+	return s.split('|')[0] == 'nus'
+
+
 def constructBusArrivalResponse(bus_stop_obj):
 	c = bus_stop_obj
+	if c.BusStopCode in cache:
+		return cache[c.BusStopCode]
 	#resp = u'\ud83d\ude8f<b>' + c.BusStopCode + u'</b>  Seating: \u2705\u26a0\ufe0f\u274c:\n'
 	bus_stop = getBusStopByCode(c.BusStopCode)
 	resp = u"\ud83d\ude8f<b>{} ({})</b>\n".format(bus_stop.Description, c.BusStopCode)
@@ -138,9 +161,15 @@ def constructBusArrivalResponse(bus_stop_obj):
 						resp += u"{}min{}, ".format(bus.Arrival, lookup[bus.Load], lookup[bus.Type])
 			resp = resp.rstrip(', ')
 			resp += '\n'
+	cache[c.BusStopCode] = resp
 	return resp
 
 
+def constructNusArrivals(bus_stops):
+	content = ""
+	for bus in bus_stops:
+		content += "{}: {}\n".format(bus.name, bus.arrival)
+	return content
 
 
 def getBusArrivals(bus_stop_code):
@@ -190,6 +219,29 @@ def parseArrivals(bus_arrival_json):
 		busstop.Services.append(s)
 	return busstop
 
+
+
+def callNusAPI(stopname):
+	'''returns dictionary'''
+	url = 'http://nextbus.comfortdelgro.com.sg/testMethod.asmx/GetShuttleService?busstopname='
+	r = requests.get(url + stopname)
+	a = r.content
+	j = a.split('>')[2].split('<')[0]
+	d = json.loads(j)
+	return d['ShuttleServiceResult']
+
+
+def getNusArrivals(stopname):
+	a = callNusAPI(stopname)
+	buses = []
+	for i in a['shuttles']:
+		bus = Bus()
+		name = i['name']
+		atime = i['nextArrivalTime']
+		bus.name = name
+		bus.arrival = atime
+		buses.append(bus)
+	return buses
 
 def simpletimedelta(time2):
 	'''returns time difference as tuple in (HH, MM, SS) format, t2 must be later than t1'''
@@ -254,6 +306,21 @@ def readBusStopsintoMem():
 
 
 
+def readNusStopsIntoMem():
+	with open('nus_buses', 'r') as f:
+		d = eval(f.read())
+
+	global bus_stops
+
+	for i in d:
+		bus = Bus()
+		bus.Description = i['caption']
+		bus.BusStopCode = i['name']
+		bus.Latitude = i['latitude']
+		bus.Longitude = i['longitude']
+		bus_stops.append(bus)
+
+
 def getBusStopByCode(busstopcode):
 	for bus_stop in bus_stops:
 		if bus_stop.BusStopCode == str(busstopcode):
@@ -267,4 +334,5 @@ def startHooking():
 
 if __name__ == '__main__':
 	readBusStopsintoMem()
+	readNusStopsIntoMem()
 	startHooking()
